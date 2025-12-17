@@ -1,0 +1,13 @@
+"survival_horror"
+{
+    "base"              "coop"
+    "maxplayers"        "4"
+    "hasdifficulty"     "1"
+    "singlechapter"     "0"
+    "playercontrolleddifficulty" "0"
+    "DisplayTitle"      "Survival Horror"
+    "Description"       "Hide or Die - A stealth survival horror experience. Headshots only. 20 bullets. No special infected. Melee allowed. Survivors are fragile."
+    "ShortDescription"  "Headshots only. Limited ammo. No healing."
+    "Author"            "Your Name Here"
+    "Image"             "vgui/menu_mode_mutation1"
+}

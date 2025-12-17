@@ -1,0 +1,42 @@
+"AddonInfo"
+{
+    "addonTitle"            "Survival Horror"
+    "addonVersion"          "1.0"
+    "addonTagline"          "Hide or Die - A Stealth Survival Horror Experience"
+    "addonAuthor"           "Your Name Here"
+    "addonDescription"      "A terrifying stealth survival horror mutation.
+
+FEATURES:
+- Sparse but deadly zombies that can be avoided with careful movement
+- HEADSHOTS ONLY - body shots just stumble them
+- Magnum pistol with only ~20 bullets total - no ammo pickups
+- Melee weapons are your friends
+- No special infected - pure zombie horror
+- Survivors are fragile - a few hits and you're down
+- No healing items - every hit counts
+- No rescue closets - death is permanent
+- Friendly fire enabled - watch your aim
+
+TIPS:
+- Move slowly and carefully
+- Avoid line of sight with infected
+- Save your bullets for emergencies
+- Melee is your primary weapon
+- Stick together but spread out enough to not attract groups
+- If spotted, RUN or fight smart
+
+Can you survive the horror?"
+
+    "addonContent_Script"   "1"
+    "addonContent_Weapon"   "0"
+    "addonContent_Sound"    "0"
+    "addonContent_Model"    "0"
+    "addonContent_Map"      "0"
+    "addonContent_Prop"     "0"
+    "addonContent_Skin"     "0"
+    "addonContent_Music"    "0"
+    "addonContent_Campaign" "0"
+    "addonContent_BossInfected" "0"
+    "addonContent_CommonInfected" "0"
+    "addonContent_Survivor" "0"
+}
