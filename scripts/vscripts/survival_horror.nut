@@ -4,9 +4,9 @@
 //
 // Features:
 // - Normal zombie population, avoidable if you move carefully
-// - Headshots only to kill infected
-// - Magnum pistol with ~20 bullets, no reloads or pickups
-// - Melee weapons allowed
+// - Headshots only to kill infected (GUNS ONLY - melee uses tiered damage)
+// - Hunting rifle with 20 bullets total (15 in clip + 5 reserve), no pickups
+// - Melee weapons allowed with normalized damage (works on all body parts)
 // - No special infected
 // - Fragile survivors (2-3 hits to incap, next hit = death)
 // - No healing items
@@ -27,6 +27,12 @@ function ApplyConvarSettings()
 
     // Enable cheats (required for some convars)
     Convars.SetValue("sv_cheats", 1)
+
+    // CRITICAL: Set hunting rifle max ammo to 5 (15 in clip + 5 reserve = 20 total)
+    Convars.SetValue("ammo_huntingrifle_max", 5)
+
+    // Disable infinite ammo
+    Convars.SetValue("sv_infinite_ammo", 0)
 
     // Disable special infected
     Convars.SetValue("z_smoker_limit", 0)
@@ -184,7 +190,7 @@ MutationOptions <-
     DefibrillatorItem = 0                     // No defibs
     UpgradePackItem = 0                       // No upgrade packs
     PrimaryWeaponItem = 0                     // No primary weapons
-    SecondaryWeaponItem = 0                   // No secondary weapons (except starting magnum)
+    SecondaryWeaponItem = 0                   // No secondary weapons
     MeleeWeaponItem = 100                     // Melee weapons spawn normally
 }
 
@@ -194,7 +200,7 @@ MutationOptions <-
 MutationState <-
 {
     AmmoInitialized = false
-    StartingAmmo = 20
+    StartingAmmo = 5  // Reserve ammo (15 in clip + 5 reserve = 20 total)
 }
 
 //------------------------------------------------------------------------------
@@ -249,7 +255,7 @@ weaponsToRemove <-
     weapon_vomitjar = 0
     weapon_vomitjar_spawn = 0
 
-    // Guns - all types
+    // Guns - all types (we only want hunting rifle from spawn)
     weapon_pistol = 0
     weapon_pistol_spawn = 0
     weapon_pistol_magnum = 0
@@ -276,7 +282,7 @@ weaponsToRemove <-
     weapon_rifle_desert_spawn = 0
     weapon_rifle_sg552 = 0
     weapon_rifle_sg552_spawn = 0
-    weapon_hunting_rifle = 0
+    weapon_hunting_rifle = 0  // Block spawned hunting rifles (we give one at start)
     weapon_hunting_rifle_spawn = 0
     weapon_sniper_military = 0
     weapon_sniper_military_spawn = 0
@@ -300,24 +306,77 @@ weaponsToRemove <-
 }
 
 //------------------------------------------------------------------------------
-// RemoveFirstAidKits - Remove pre-placed map items (safe room table, etc.)
+// RemoveUnwantedItems - AGGRESSIVE removal of all items
 //------------------------------------------------------------------------------
-function RemoveFirstAidKits()
+function RemoveUnwantedItems()
 {
-    local kit = null
-    while ((kit = Entities.FindByClassname(kit, "weapon_first_aid_kit")) != null)
+    Msg("Survival Horror: Starting aggressive item removal...\n")
+    local removeCount = 0
+    
+    // Remove all items in weaponsToRemove table
+    foreach (weaponClass, _ in weaponsToRemove)
     {
-        kit.Kill()
+        // Kill spawn entities
+        EntFire(weaponClass, "Kill")
+        
+        // Find and kill actual spawned items
+        local ent = null
+        while ((ent = Entities.FindByClassname(ent, weaponClass)) != null)
+        {
+            ent.Kill()
+            removeCount++
+        }
+    }
+    
+    // Also specifically target common spawn entity names
+    EntFire("weapon_spawn", "Kill")
+    EntFire("weapon_item_spawn", "Kill")
+    
+    Msg("Survival Horror: Removed " + removeCount + " items from map\n")
+}
+
+//------------------------------------------------------------------------------
+// CapPlayerAmmo - Ensure player never exceeds 5 reserve rounds
+//------------------------------------------------------------------------------
+function CapPlayerAmmo(player)
+{
+    if (player == null) return
+    if (!player.IsValid()) return
+    
+    try {
+        // Get active weapon
+        local weapon = player.GetActiveWeapon()
+        if (weapon == null) return
+        
+        // Check if it's a hunting rifle
+        if (weapon.GetClassname() != "weapon_hunting_rifle") return
+        
+        // Get ammo type for hunting rifle
+        local ammoType = NetProps.GetPropInt(weapon, "m_iPrimaryAmmoType")
+        
+        // Get current reserve ammo
+        local reserveAmmo = NetProps.GetPropIntArray(player, "m_iAmmo", ammoType)
+        
+        // Cap at 5 rounds reserve
+        if (reserveAmmo > 5)
+        {
+            NetProps.SetPropIntArray(player, "m_iAmmo", 5, ammoType)
+            Msg("Survival Horror: Capped player ammo to 5 reserve\n")
+        }
+    }
+    catch (e)
+    {
+        // Silently fail - NetProps might not be available yet
     }
 }
 
 //------------------------------------------------------------------------------
 // GetDefaultItem - Starting loadout
-// Players start with only a Magnum pistol
+// Players start with only a Hunting Rifle (20 rounds total)
 //------------------------------------------------------------------------------
 function GetDefaultItem(index)
 {
-    if (index == 0) return "pistol_magnum"
+    if (index == 0) return "hunting_rifle"
     return 0
 }
 
@@ -329,6 +388,7 @@ function AllowWeaponSpawn(classname)
     // Check if this weapon should be removed
     if (classname in weaponsToRemove)
     {
+        Msg("Survival Horror: Blocked spawn of " + classname + "\n")
         return false
     }
 
@@ -338,10 +398,7 @@ function AllowWeaponSpawn(classname)
     if (classname.find("melee") != null) return true
 
     // Block everything else by default
-    // - All ammo (ammo_spawn, weapon_ammo_spawn, upgrade_ammo_*)
-    // - All throwables (pipe bombs, molotovs, bile bombs)
-    // - All health items (first aid, pills, adrenaline, defibrillator)
-    // - All special items (gnome, cola)
+    Msg("Survival Horror: Blocked unknown spawn: " + classname + "\n")
     return false
 }
 
@@ -430,7 +487,34 @@ function GetMeleeDamageMultiplier(weaponName)
 }
 
 //------------------------------------------------------------------------------
-// AllowTakeDamage - Headshots only + Tiered melee + Survivor fragility
+// IsHitgroupHead - Check if hitgroup is the head
+//------------------------------------------------------------------------------
+function IsHitgroupHead(hitgroup)
+{
+    // Hitgroup 1 = head
+    return (hitgroup == 1)
+}
+
+//------------------------------------------------------------------------------
+// IsHitgroupBody - Check if hitgroup is body/chest/stomach
+//------------------------------------------------------------------------------
+function IsHitgroupBody(hitgroup)
+{
+    // Hitgroups 2-5 are typically body parts (chest, stomach, arms)
+    return (hitgroup >= 2 && hitgroup <= 5)
+}
+
+//------------------------------------------------------------------------------
+// IsHitgroupLegs - Check if hitgroup is legs/feet
+//------------------------------------------------------------------------------
+function IsHitgroupLegs(hitgroup)
+{
+    // Hitgroups 6-7 are legs/feet
+    return (hitgroup >= 6 && hitgroup <= 7)
+}
+
+//------------------------------------------------------------------------------
+// AllowTakeDamage - FIXED: Melee damage normalized across all hitgroups
 //------------------------------------------------------------------------------
 function AllowTakeDamage(dmgTable)
 {
@@ -443,13 +527,13 @@ function AllowTakeDamage(dmgTable)
     local victimClass = victim.GetClassname()
 
     //--------------------------------------------------------------------------
-    // DAMAGE TO INFECTED - Headshots only for guns, tiered for melee
+    // DAMAGE TO INFECTED - Headshots only for guns, normalized melee
     //--------------------------------------------------------------------------
     if (victimClass == "infected")
     {
         local hitgroup = ("Hitgroup" in dmgTable) ? dmgTable.Hitgroup : -1
         local dmgType = ("DamageType" in dmgTable) ? dmgTable.DamageType : 0
-        local isHeadshot = (hitgroup == 1)
+        local isHeadshot = IsHitgroupHead(hitgroup)
 
         // Check if attacker is using a melee weapon (more reliable than damage types)
         local isMelee = false
@@ -475,14 +559,53 @@ function AllowTakeDamage(dmgTable)
 
         if (isMelee)
         {
-            // Melee attack - apply tiered damage
-            local multiplier = GetMeleeDamageMultiplier(weaponName)
-            dmgTable.DamageDone = dmgTable.DamageDone * multiplier
+            //==================================================================
+            // FIX: NORMALIZE MELEE DAMAGE ACROSS ALL HITGROUPS
+            //==================================================================
+            // Problem: L4D2 melee damage is affected by hitgroup multipliers
+            //   - Head (hitgroup 1): 4.0x damage
+            //   - Body (hitgroups 2-5): 1.0x damage  
+            //   - Legs (hitgroups 6-7): 0.75x damage
+            //
+            // This causes melee to only "work" on headshots because leg/body
+            // hits don't do enough damage to kill.
+            //
+            // Solution: Detect non-head hits and boost damage to compensate
+            // for the hitgroup penalty, making all hits equally effective.
+            //==================================================================
+            
+            local baseDamage = dmgTable.DamageDone
+            local tierMultiplier = GetMeleeDamageMultiplier(weaponName)
+            
+            // Determine hitgroup penalty that the engine already applied
+            local hitgroupMultiplier = 1.0
+            if (IsHitgroupHead(hitgroup))
+            {
+                // Head hits get 4x - this is good, keep it
+                hitgroupMultiplier = 4.0
+            }
+            else if (IsHitgroupBody(hitgroup))
+            {
+                // Body hits get 1x - this is the baseline
+                hitgroupMultiplier = 1.0
+            }
+            else if (IsHitgroupLegs(hitgroup))
+            {
+                // Leg hits get 0.75x - this is the problem!
+                hitgroupMultiplier = 0.75
+            }
+            
+            // Normalize: divide out the hitgroup penalty, then apply our tier system
+            // This makes body/leg hits as effective as they should be
+            local normalizedDamage = (baseDamage / hitgroupMultiplier) * tierMultiplier * 4.0
+            
+            dmgTable.DamageDone = normalizedDamage
+            
             return true
         }
         else if (!isHeadshot)
         {
-            // Gun body shot - block damage
+            // Gun body shot - block damage (headshots only rule)
             dmgTable.DamageDone = 0
             return true
         }
@@ -511,13 +634,15 @@ function AllowTakeDamage(dmgTable)
 //------------------------------------------------------------------------------
 function ShouldAvoidItem(classname)
 {
-    // Bots should avoid all guns
-    if (classname.find("pistol") != null && classname != "pistol_magnum") return true
+    // Bots should avoid picking up extra hunting rifles
+    if (classname.find("hunting_rifle") != null) return true
+    
+    // Bots should avoid all other guns
+    if (classname.find("pistol") != null) return true
     if (classname.find("rifle") != null) return true
     if (classname.find("shotgun") != null) return true
     if (classname.find("smg") != null) return true
     if (classname.find("sniper") != null) return true
-    if (classname.find("hunting") != null) return true
     
     // Don't avoid melee
     if (classname.find("melee") != null) return false
@@ -532,14 +657,14 @@ function OnGameEvent_round_start(params)
 {
     Msg("Survival Horror: Round starting...\n")
 
-    // Remove pre-placed map items (safe room table, etc.)
-    RemoveFirstAidKits()
+    // Remove unwanted items aggressively
+    RemoveUnwantedItems()
 
     // Set friendly fire on
     Convars.SetValue("mp_friendlyfire", 1)
     
-    // Try to limit ammo via convars (may not affect pistols directly)
-    Convars.SetValue("ammo_pistol_max", 20)
+    // Set hunting rifle max ammo to 5
+    Convars.SetValue("ammo_huntingrifle_max", 5)
     Convars.SetValue("survivor_respawn_with_guns", 0)
     
     // Disable director panic spawns
@@ -549,29 +674,59 @@ function OnGameEvent_round_start(params)
 }
 
 //------------------------------------------------------------------------------
+// RemovePlayerPistol - Remove pistol from player inventory
+//------------------------------------------------------------------------------
+function RemovePlayerPistol(player)
+{
+    if (player == null) return
+    if (!player.IsValid()) return
+    
+    try {
+        // Get player's inventory
+        local invTable = {}
+        GetInvTable(player, invTable)
+        
+        // Remove any pistols
+        foreach(slot, weapon in invTable)
+        {
+            local classname = weapon.GetClassname()
+            if (classname == "weapon_pistol" || classname == "weapon_pistol_magnum")
+            {
+                weapon.Kill()
+                Msg("Survival Horror: Removed " + classname + " from player\n")
+            }
+        }
+    }
+    catch (e)
+    {
+        // Silently fail
+    }
+}
+
+//------------------------------------------------------------------------------
 // OnGameEvent_player_spawn - Called when a player spawns
 //------------------------------------------------------------------------------
 function OnGameEvent_player_spawn(params)
 {
-    // Note: Timer functionality removed - ammo limiting handled via convars
-    // The magnum starts with limited ammo based on ammo_pistol_max
+    // Get the player entity
+    local player = GetPlayerFromUserID(params.userid)
+    if (player == null) return
+    
+    // Remove default pistol and cap ammo after spawn
+    DoEntFire("!self", "RunScriptCode", "RemovePlayerPistol(GetPlayerFromUserID(" + params.userid + "))", 0.1, null, null)
+    DoEntFire("!self", "RunScriptCode", "CapPlayerAmmo(GetPlayerFromUserID(" + params.userid + "))", 0.5, null, null)
 }
 
 //------------------------------------------------------------------------------
-// AmmoSetupTimer - Set up limited ammo after spawn
+// OnGameEvent_weapon_reload - Cap ammo on reload
 //------------------------------------------------------------------------------
-function AmmoSetupTimer()
+function OnGameEvent_weapon_reload(params)
 {
-    Msg("Survival Horror: Setting up limited ammo...\n")
+    local player = GetPlayerFromUserID(params.userid)
+    if (player == null) return
     
-    // Iterate through all players and set their ammo
-    local player = null
-    while ((player = Entities.FindByClassname(player, "player")) != null)
-    {
-        // Try to set ammo to 20 via input
-        // The magnum normally has 8 in clip, this sets reserve
-        DoEntFire("!self", "SetAmmoAmount", "20", 0.0, null, player)
-    }
+    // Cap ammo after reload completes
+    DoEntFire("!self", "RunScriptCode", "CapPlayerAmmo(GetPlayerFromUserID(" + params.userid + "))", 0.1, null, null)
 }
 
 //------------------------------------------------------------------------------
@@ -583,14 +738,6 @@ function OnGameEvent_player_incapacitated(params)
 }
 
 //------------------------------------------------------------------------------
-// Update - Called every tick (use sparingly)
-// We don't need continuous updates for this mutation
-//------------------------------------------------------------------------------
-// function Update()
-// {
-// }
-
-//------------------------------------------------------------------------------
 // REGISTER EVENT CALLBACKS
 //------------------------------------------------------------------------------
 function OnGameEvent_round_start_post_nav(params)
@@ -598,8 +745,12 @@ function OnGameEvent_round_start_post_nav(params)
     // Additional setup after navigation is loaded
     Msg("Survival Horror: Map loaded, preparing horror...\n")
 
-    // Remove pre-placed map items (safe room table, etc.)
-    RemoveFirstAidKits()
+    // Remove unwanted items again (some maps spawn items late)
+    RemoveUnwantedItems()
+    
+    // Schedule periodic removal to catch any late spawns
+    DoEntFire("!self", "RunScriptCode", "RemoveUnwantedItems()", 5.0, null, null)
+    DoEntFire("!self", "RunScriptCode", "RemoveUnwantedItems()", 10.0, null, null)
 }
 
 //------------------------------------------------------------------------------
@@ -631,4 +782,5 @@ ApplyConvarSettings()
 
 Msg("Survival Horror Mutation Script Initialized!\n")
 Msg("=== SURVIVAL HORROR ACTIVE ===\n")
-Msg("Headshots only. Melee allowed. No special infected.\n")
+Msg("Headshots only for GUNS. Melee works on all body parts.\n")
+Msg("Hunting rifle with 20 rounds total (15 in clip + 5 reserve).\n")
