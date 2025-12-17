@@ -3,10 +3,14 @@
 // A stealth survival horror experience for Left 4 Dead 2
 //
 // Features:
-// - Normal zombie population, avoidable if you move carefully
-// - Headshots only to kill infected (GUNS ONLY - melee uses tiered damage)
-// - Hunting rifle with 20 bullets total (15 in clip + 5 reserve), no pickups
-// - Melee weapons allowed with normalized damage (works on all body parts)
+// - HUMANS ONLY - no AI survivor bots allowed
+// - Reduced zombie population (max 80, culled by clusters at round start)
+// - Headshots only to kill infected with GUNS
+// - Melee weapons: tiered damage with random multiplier (25%-100%)
+//     - Tier 1 (katana, machete, fireaxe, chainsaw): 25%-100% damage
+//     - Tier 2 (baseball bat, crowbar, etc.): 12.5%-50% damage
+//     - Tier 3 (frying pan, tonfa): 6.25%-25% damage
+// - Hunting rifle with 20 bullets total (all in clip, no reserve, no pickups)
 // - No special infected
 // - Fragile survivors (2-3 hits to incap, next hit = death)
 // - No healing items
@@ -19,6 +23,23 @@
 Msg("Survival Horror Mutation Loading...\n")
 
 //------------------------------------------------------------------------------
+// CONSTANTS
+//------------------------------------------------------------------------------
+// Zombie control
+ZOMBIE_TARGET_COUNT <- 80         // Max zombies on map
+ZOMBIE_CULL_DELAY <- 2.5          // Seconds after round start to cull
+
+// Cluster scoring distances (in Source units)
+// Used to prioritize killing clustered zombies during culling
+CLUSTER_DIST_VERY_CLOSE <- 66     // 2 meters - score +3
+CLUSTER_DIST_CLOSE <- 131         // 4 meters - score +2
+CLUSTER_DIST_NEARBY <- 525        // 16 meters - score +1
+
+// Ammo settings
+HUNTING_RIFLE_CLIP <- 20          // Total ammo (all in clip, no reserve)
+HUNTING_RIFLE_AMMO_INDEX <- 2     // NetProp index for sniper/hunting rifle ammo
+
+//------------------------------------------------------------------------------
 // APPLY SETTINGS VIA CONVARS (works with script_execute)
 //------------------------------------------------------------------------------
 function ApplyConvarSettings()
@@ -28,8 +49,8 @@ function ApplyConvarSettings()
     // Enable cheats (required for some convars)
     Convars.SetValue("sv_cheats", 1)
 
-    // CRITICAL: Set hunting rifle max ammo to 5 (15 in clip + 5 reserve = 20 total)
-    Convars.SetValue("ammo_huntingrifle_max", 5)
+    // Set hunting rifle max reserve ammo to 0 (we use clip only, set via SetClip1)
+    Convars.SetValue("ammo_huntingrifle_max", 0)
 
     // Disable infinite ammo
     Convars.SetValue("sv_infinite_ammo", 0)
@@ -48,8 +69,9 @@ function ApplyConvarSettings()
     Convars.SetValue("director_no_bosses", 1)
     Convars.SetValue("director_no_specials", 1)
 
-    // Disable mobs/hordes
+    // Disable mobs/hordes and limit common infected count
     Convars.SetValue("director_no_mobs", 1)
+    Convars.SetValue("z_common_limit", ZOMBIE_TARGET_COUNT)  // Max 80 common infected
 
     // Friendly fire
     Convars.SetValue("mp_friendlyfire", 1)
@@ -57,6 +79,10 @@ function ApplyConvarSettings()
     // Survivor settings
     Convars.SetValue("survivor_max_incapacitated_count", 1)
     Convars.SetValue("survivor_respawn_with_guns", 0)
+    
+    // Disable survivor bots - humans only
+    Convars.SetValue("sb_all_bot_game", 0)
+    Convars.SetValue("allow_all_bot_survivor_team", 0)
 
     Msg("Survival Horror: Convars applied!\n")
 }
@@ -86,6 +112,19 @@ function RegisterCallbacks()
     {
         getroottable().GetDefaultItem <- GetDefaultItem
         Msg("Survival Horror: GetDefaultItem registered\n")
+    }
+    
+    // Register new event callbacks for zombie control and ammo blocking
+    if (!("OnGameEvent_ammo_pickup" in getroottable()))
+    {
+        getroottable().OnGameEvent_ammo_pickup <- OnGameEvent_ammo_pickup
+        Msg("Survival Horror: OnGameEvent_ammo_pickup registered\n")
+    }
+    
+    if (!("OnGameEvent_infected_spawn" in getroottable()))
+    {
+        getroottable().OnGameEvent_infected_spawn <- OnGameEvent_infected_spawn
+        Msg("Survival Horror: OnGameEvent_infected_spawn registered\n")
     }
 }
 
@@ -172,7 +211,7 @@ MutationOptions <-
     //==========================================================================
     cm_AllowPillConversion = false            // No item conversions
     cm_AllowSurvivorRescue = false            // No rescue closets - death matters
-    cm_NoSurvivorBots = false                 // Allow bots if needed
+    cm_NoSurvivorBots = true                  // NO BOTS - humans only
     cm_ShouldHurry = false                    // Bots don't rush
 
     // Water doesn't slow (for escaping)
@@ -336,38 +375,198 @@ function RemoveUnwantedItems()
 }
 
 //------------------------------------------------------------------------------
-// CapPlayerAmmo - Ensure player never exceeds 5 reserve rounds
+// SetupPlayerLoadout - Complete weapon setup for survival horror
+// Strips all weapons, gives hunting rifle with 20 rounds (no reserve)
 //------------------------------------------------------------------------------
-function CapPlayerAmmo(player)
+function SetupPlayerLoadout(player)
 {
     if (player == null) return
     if (!player.IsValid()) return
     
     try {
-        // Get active weapon
-        local weapon = player.GetActiveWeapon()
-        if (weapon == null) return
+        Msg("Survival Horror: Setting up loadout for player\n")
         
-        // Check if it's a hunting rifle
-        if (weapon.GetClassname() != "weapon_hunting_rifle") return
-        
-        // Get ammo type for hunting rifle
-        local ammoType = NetProps.GetPropInt(weapon, "m_iPrimaryAmmoType")
-        
-        // Get current reserve ammo
-        local reserveAmmo = NetProps.GetPropIntArray(player, "m_iAmmo", ammoType)
-        
-        // Cap at 5 rounds reserve
-        if (reserveAmmo > 5)
+        // Step 1: Strip ALL weapons by iterating m_hMyWeapons array (slots 0-5)
+        for (local i = 0; i < 6; i++)
         {
-            NetProps.SetPropIntArray(player, "m_iAmmo", 5, ammoType)
-            Msg("Survival Horror: Capped player ammo to 5 reserve\n")
+            local weapon = NetProps.GetPropEntityArray(player, "m_hMyWeapons", i)
+            if (weapon != null && weapon.IsValid())
+            {
+                local classname = weapon.GetClassname()
+                weapon.Kill()
+                Msg("Survival Horror: Stripped " + classname + " from slot " + i + "\n")
+            }
         }
+        
+        // Step 2: Give hunting rifle
+        player.GiveItem("hunting_rifle")
+        Msg("Survival Horror: Gave hunting rifle\n")
+        
+        // Step 3: Set clip to 20 and reserve to 0 (after short delay for weapon to equip)
+        DoEntFire("!self", "RunScriptCode", "FinalizePlayerAmmo(GetPlayerFromUserID(" + player.GetPlayerUserId() + "))", 0.1, null, null)
     }
     catch (e)
     {
-        // Silently fail - NetProps might not be available yet
+        Msg("Survival Horror: Error in SetupPlayerLoadout: " + e + "\n")
     }
+}
+
+//------------------------------------------------------------------------------
+// FinalizePlayerAmmo - Set clip to 20 and reserve to 0
+// Called after weapon is equipped
+//------------------------------------------------------------------------------
+function FinalizePlayerAmmo(player)
+{
+    if (player == null) return
+    if (!player.IsValid()) return
+    
+    try {
+        local weapon = player.GetActiveWeapon()
+        if (weapon != null && weapon.GetClassname() == "weapon_hunting_rifle")
+        {
+            // Set clip to 20 rounds
+            weapon.SetClip1(HUNTING_RIFLE_CLIP)
+            Msg("Survival Horror: Set clip to " + HUNTING_RIFLE_CLIP + " rounds\n")
+        }
+        
+        // Set ALL reserve ammo types to 0 to be thorough
+        for (local i = 0; i < 32; i++)
+        {
+            NetProps.SetPropIntArray(player, "m_iAmmo", 0, i)
+        }
+        Msg("Survival Horror: Cleared all reserve ammo\n")
+    }
+    catch (e)
+    {
+        Msg("Survival Horror: Error in FinalizePlayerAmmo: " + e + "\n")
+    }
+}
+
+//------------------------------------------------------------------------------
+// KickAllSurvivorBots - Remove all AI survivor bots from the game
+//------------------------------------------------------------------------------
+function KickAllSurvivorBots()
+{
+    local kickedCount = 0
+    local ent = null
+    
+    while ((ent = Entities.FindByClassname(ent, "player")) != null)
+    {
+        if (ent.IsValid() && ent.IsSurvivor())
+        {
+            try {
+                if (IsPlayerABot(ent))
+                {
+                    // Kick the bot
+                    local userid = ent.GetPlayerUserId()
+                    SendToServerConsole("kick " + ent.GetPlayerName())
+                    kickedCount++
+                    Msg("Survival Horror: Kicked bot survivor\n")
+                }
+            }
+            catch (e) {}
+        }
+    }
+    
+    if (kickedCount > 0)
+    {
+        Msg("Survival Horror: Kicked " + kickedCount + " survivor bots (humans only!)\n")
+    }
+    
+    return kickedCount
+}
+
+//------------------------------------------------------------------------------
+// CountInfected - Count current common infected on the map
+//------------------------------------------------------------------------------
+function CountInfected()
+{
+    local count = 0
+    local ent = null
+    while ((ent = Entities.FindByClassname(ent, "infected")) != null)
+    {
+        if (ent.IsValid())
+            count++
+    }
+    return count
+}
+
+//------------------------------------------------------------------------------
+// CullZombiesToTarget - Reduce zombie count using cluster-aware culling
+// Preferentially removes zombies that are close to other zombies
+//------------------------------------------------------------------------------
+function CullZombiesToTarget(targetCount)
+{
+    Msg("Survival Horror: Starting cluster-aware zombie culling...\n")
+    
+    // Step 1: Collect all infected entities
+    local zombies = []
+    local ent = null
+    while ((ent = Entities.FindByClassname(ent, "infected")) != null)
+    {
+        if (ent.IsValid())
+            zombies.append(ent)
+    }
+    
+    local currentCount = zombies.len()
+    Msg("Survival Horror: Found " + currentCount + " zombies on map\n")
+    
+    // If already at or below target, nothing to do
+    if (currentCount <= targetCount)
+    {
+        Msg("Survival Horror: Count (" + currentCount + ") <= target (" + targetCount + "), no culling needed\n")
+        return
+    }
+    
+    local toDelete = currentCount - targetCount
+    Msg("Survival Horror: Need to cull " + toDelete + " zombies\n")
+    
+    // Step 2: Calculate cluster score for each zombie
+    // Higher score = more clustered = higher priority for deletion
+    local scored = []
+    foreach (zombie in zombies)
+    {
+        local pos = zombie.GetOrigin()
+        local clusterScore = 0
+        
+        // Count nearby zombies and score based on distance
+        foreach (other in zombies)
+        {
+            if (other == zombie) continue
+            
+            local dist = (other.GetOrigin() - pos).Length()
+            
+            if (dist < CLUSTER_DIST_VERY_CLOSE)
+                clusterScore += 3  // Very close (2m) - high score
+            else if (dist < CLUSTER_DIST_CLOSE)
+                clusterScore += 2  // Close (4m) - medium score
+            else if (dist < CLUSTER_DIST_NEARBY)
+                clusterScore += 1  // Nearby (16m) - low score
+        }
+        
+        scored.append({ zombie = zombie, score = clusterScore })
+    }
+    
+    // Step 3: Sort by cluster score (highest first)
+    // Squirrel sort is in-place, compare function returns negative/zero/positive
+    scored.sort(function(a, b) {
+        if (b.score > a.score) return 1
+        if (b.score < a.score) return -1
+        return 0
+    })
+    
+    // Step 4: Delete the most clustered zombies
+    local deleted = 0
+    for (local i = 0; i < toDelete && i < scored.len(); i++)
+    {
+        if (scored[i].zombie.IsValid())
+        {
+            scored[i].zombie.Kill()
+            deleted++
+        }
+    }
+    
+    Msg("Survival Horror: Culled " + deleted + " zombies, " + (currentCount - deleted) + " remaining\n")
 }
 
 //------------------------------------------------------------------------------
@@ -469,52 +668,28 @@ function GetMeleeWeaponName(attacker)
 }
 
 //------------------------------------------------------------------------------
-// GetMeleeDamageMultiplier - Get damage multiplier based on weapon tier
+// GetMeleeTierMultiplier - Get base damage multiplier based on weapon tier
+// This is combined with a random multiplier (0.25-1.0) for final damage
 //------------------------------------------------------------------------------
-function GetMeleeDamageMultiplier(weaponName)
+function GetMeleeTierMultiplier(weaponName)
 {
-    // Tier 1 - Full damage (1-hit kill)
+    // Tier 1 - Full base damage (bladed weapons)
     if (weaponName in tier1Melee) return 1.0
 
-    // Tier 2 - Half damage (2-hit kill)
+    // Tier 2 - Half base damage (blunt weapons)
     if (weaponName in tier2Melee) return 0.5
 
-    // Tier 3 - Third damage (3-hit kill)
-    if (weaponName in tier3Melee) return 0.35
+    // Tier 3 - Quarter base damage (improvised weapons)
+    if (weaponName in tier3Melee) return 0.25
 
     // Unknown weapon - default to tier 2
     return 0.5
 }
 
-//------------------------------------------------------------------------------
-// IsHitgroupHead - Check if hitgroup is the head
-//------------------------------------------------------------------------------
-function IsHitgroupHead(hitgroup)
-{
-    // Hitgroup 1 = head
-    return (hitgroup == 1)
-}
+
 
 //------------------------------------------------------------------------------
-// IsHitgroupBody - Check if hitgroup is body/chest/stomach
-//------------------------------------------------------------------------------
-function IsHitgroupBody(hitgroup)
-{
-    // Hitgroups 2-5 are typically body parts (chest, stomach, arms)
-    return (hitgroup >= 2 && hitgroup <= 5)
-}
-
-//------------------------------------------------------------------------------
-// IsHitgroupLegs - Check if hitgroup is legs/feet
-//------------------------------------------------------------------------------
-function IsHitgroupLegs(hitgroup)
-{
-    // Hitgroups 6-7 are legs/feet
-    return (hitgroup >= 6 && hitgroup <= 7)
-}
-
-//------------------------------------------------------------------------------
-// AllowTakeDamage - FIXED: Melee damage normalized across all hitgroups
+// AllowTakeDamage - Headshots only for guns, tiered random damage for melee
 //------------------------------------------------------------------------------
 function AllowTakeDamage(dmgTable)
 {
@@ -527,13 +702,13 @@ function AllowTakeDamage(dmgTable)
     local victimClass = victim.GetClassname()
 
     //--------------------------------------------------------------------------
-    // DAMAGE TO INFECTED - Headshots only for guns, normalized melee
+    // DAMAGE TO INFECTED - Headshots only for guns, tiered random for melee
     //--------------------------------------------------------------------------
     if (victimClass == "infected")
     {
         local hitgroup = ("Hitgroup" in dmgTable) ? dmgTable.Hitgroup : -1
         local dmgType = ("DamageType" in dmgTable) ? dmgTable.DamageType : 0
-        local isHeadshot = IsHitgroupHead(hitgroup)
+        local isHeadshot = (hitgroup == 1)  // Hitgroup 1 = head
 
         // Check if attacker is using a melee weapon (more reliable than damage types)
         local isMelee = false
@@ -560,46 +735,20 @@ function AllowTakeDamage(dmgTable)
         if (isMelee)
         {
             //==================================================================
-            // FIX: NORMALIZE MELEE DAMAGE ACROSS ALL HITGROUPS
+            // MELEE DAMAGE: Tier multiplier * Random multiplier
             //==================================================================
-            // Problem: L4D2 melee damage is affected by hitgroup multipliers
-            //   - Head (hitgroup 1): 4.0x damage
-            //   - Body (hitgroups 2-5): 1.0x damage  
-            //   - Legs (hitgroups 6-7): 0.75x damage
+            // Tier 1 (bladed): 1.0 base -> 25%-100% final damage
+            // Tier 2 (blunt):  0.5 base -> 12.5%-50% final damage
+            // Tier 3 (improv): 0.25 base -> 6.25%-25% final damage
             //
-            // This causes melee to only "work" on headshots because leg/body
-            // hits don't do enough damage to kill.
-            //
-            // Solution: Detect non-head hits and boost damage to compensate
-            // for the hitgroup penalty, making all hits equally effective.
+            // This creates variable damage that makes melee unreliable
+            // but still useful. Sometimes you get lucky, sometimes not.
             //==================================================================
             
-            local baseDamage = dmgTable.DamageDone
-            local tierMultiplier = GetMeleeDamageMultiplier(weaponName)
+            local tierMultiplier = GetMeleeTierMultiplier(weaponName)
+            local randomMultiplier = 0.25 + (RandomFloat(0.0, 1.0) * 0.75)  // 0.25 to 1.0
             
-            // Determine hitgroup penalty that the engine already applied
-            local hitgroupMultiplier = 1.0
-            if (IsHitgroupHead(hitgroup))
-            {
-                // Head hits get 4x - this is good, keep it
-                hitgroupMultiplier = 4.0
-            }
-            else if (IsHitgroupBody(hitgroup))
-            {
-                // Body hits get 1x - this is the baseline
-                hitgroupMultiplier = 1.0
-            }
-            else if (IsHitgroupLegs(hitgroup))
-            {
-                // Leg hits get 0.75x - this is the problem!
-                hitgroupMultiplier = 0.75
-            }
-            
-            // Normalize: divide out the hitgroup penalty, then apply our tier system
-            // This makes body/leg hits as effective as they should be
-            local normalizedDamage = (baseDamage / hitgroupMultiplier) * tierMultiplier * 4.0
-            
-            dmgTable.DamageDone = normalizedDamage
+            dmgTable.DamageDone = dmgTable.DamageDone * tierMultiplier * randomMultiplier
             
             return true
         }
@@ -663,44 +812,21 @@ function OnGameEvent_round_start(params)
     // Set friendly fire on
     Convars.SetValue("mp_friendlyfire", 1)
     
-    // Set hunting rifle max ammo to 5
-    Convars.SetValue("ammo_huntingrifle_max", 5)
+    // Set hunting rifle max ammo (reserve) - we set clip directly via SetClip1
+    Convars.SetValue("ammo_huntingrifle_max", 0)
     Convars.SetValue("survivor_respawn_with_guns", 0)
     
-    // Disable director panic spawns
+    // Disable director panic spawns and limit zombie count
     Convars.SetValue("director_no_mobs", 1)
+    Convars.SetValue("z_common_limit", ZOMBIE_TARGET_COUNT)
     
     MutationState.AmmoInitialized = false
-}
-
-//------------------------------------------------------------------------------
-// RemovePlayerPistol - Remove pistol from player inventory
-//------------------------------------------------------------------------------
-function RemovePlayerPistol(player)
-{
-    if (player == null) return
-    if (!player.IsValid()) return
     
-    try {
-        // Get player's inventory
-        local invTable = {}
-        GetInvTable(player, invTable)
-        
-        // Remove any pistols
-        foreach(slot, weapon in invTable)
-        {
-            local classname = weapon.GetClassname()
-            if (classname == "weapon_pistol" || classname == "weapon_pistol_magnum")
-            {
-                weapon.Kill()
-                Msg("Survival Horror: Removed " + classname + " from player\n")
-            }
-        }
-    }
-    catch (e)
-    {
-        // Silently fail
-    }
+    // Kick all survivor bots (humans only mode)
+    DoEntFire("!self", "RunScriptCode", "KickAllSurvivorBots()", 1.0, null, null)
+    
+    // Cull zombies to target count after delay (let map finish spawning)
+    DoEntFire("!self", "RunScriptCode", "CullZombiesToTarget(" + ZOMBIE_TARGET_COUNT + ")", ZOMBIE_CULL_DELAY, null, null)
 }
 
 //------------------------------------------------------------------------------
@@ -712,21 +838,47 @@ function OnGameEvent_player_spawn(params)
     local player = GetPlayerFromUserID(params.userid)
     if (player == null) return
     
-    // Remove default pistol and cap ammo after spawn
-    DoEntFire("!self", "RunScriptCode", "RemovePlayerPistol(GetPlayerFromUserID(" + params.userid + "))", 0.1, null, null)
-    DoEntFire("!self", "RunScriptCode", "CapPlayerAmmo(GetPlayerFromUserID(" + params.userid + "))", 0.5, null, null)
+    // Skip bots - they shouldn't be here anyway, but just in case
+    try {
+        if (IsPlayerABot(player)) return
+    } catch (e) {}
+    
+    // Setup complete loadout after 1 second delay (strip all weapons, give rifle, set ammo)
+    DoEntFire("!self", "RunScriptCode", "SetupPlayerLoadout(GetPlayerFromUserID(" + params.userid + "))", 1.0, null, null)
 }
 
 //------------------------------------------------------------------------------
-// OnGameEvent_weapon_reload - Cap ammo on reload
+// OnGameEvent_ammo_pickup - Block ammo pickups by resetting reserve to 0
 //------------------------------------------------------------------------------
-function OnGameEvent_weapon_reload(params)
+function OnGameEvent_ammo_pickup(params)
 {
     local player = GetPlayerFromUserID(params.userid)
     if (player == null) return
     
-    // Cap ammo after reload completes
-    DoEntFire("!self", "RunScriptCode", "CapPlayerAmmo(GetPlayerFromUserID(" + params.userid + "))", 0.1, null, null)
+    // Immediately reset all reserve ammo to 0
+    try {
+        for (local i = 0; i < 32; i++)
+        {
+            NetProps.SetPropIntArray(player, "m_iAmmo", 0, i)
+        }
+        Msg("Survival Horror: Blocked ammo pickup, reset reserve to 0\n")
+    }
+    catch (e) {}
+}
+
+//------------------------------------------------------------------------------
+// OnGameEvent_infected_spawn - Auto-cull if zombie count exceeds target
+//------------------------------------------------------------------------------
+function OnGameEvent_infected_spawn(params)
+{
+    // Check current count
+    local count = CountInfected()
+    if (count > ZOMBIE_TARGET_COUNT)
+    {
+        // Too many zombies - cull back down
+        Msg("Survival Horror: Zombie count (" + count + ") exceeds target, culling...\n")
+        CullZombiesToTarget(ZOMBIE_TARGET_COUNT)
+    }
 }
 
 //------------------------------------------------------------------------------
@@ -782,5 +934,7 @@ ApplyConvarSettings()
 
 Msg("Survival Horror Mutation Script Initialized!\n")
 Msg("=== SURVIVAL HORROR ACTIVE ===\n")
-Msg("Headshots only for GUNS. Melee works on all body parts.\n")
-Msg("Hunting rifle with 20 rounds total (15 in clip + 5 reserve).\n")
+Msg("HUMANS ONLY - AI bots will be kicked.\n")
+Msg("Headshots only for GUNS. Melee has random damage (25%-100% per tier).\n")
+Msg("Hunting rifle with 20 rounds total. No ammo pickups.\n")
+Msg("Max 80 zombies, culled by clusters.\n")
