@@ -46,14 +46,12 @@ function ApplyConvarSettings()
 {
     Msg("Survival Horror: Applying convar settings...\n")
 
-    // Enable cheats (required for some convars)
-    Convars.SetValue("sv_cheats", 1)
+    // NOTE: sv_cheats is NOT required for these cvars via VScript
+    // VScript Convars.SetValue() has elevated privileges compared to console commands
+    // Removing sv_cheats prevents players from using cheat commands
 
     // Set hunting rifle max reserve ammo to 0 (we use clip only, set via SetClip1)
     Convars.SetValue("ammo_huntingrifle_max", 0)
-
-    // Disable infinite ammo
-    Convars.SetValue("sv_infinite_ammo", 0)
 
     // Disable special infected
     Convars.SetValue("z_smoker_limit", 0)
@@ -114,7 +112,21 @@ function RegisterCallbacks()
         Msg("Survival Horror: GetDefaultItem registered\n")
     }
     
-    // Register new event callbacks for zombie control and ammo blocking
+    // Register ALL OnGameEvent_* functions to roottable
+    // Without this, event handlers won't be found by the engine
+    
+    if (!("OnGameEvent_round_start" in getroottable()))
+    {
+        getroottable().OnGameEvent_round_start <- OnGameEvent_round_start
+        Msg("Survival Horror: OnGameEvent_round_start registered\n")
+    }
+    
+    if (!("OnGameEvent_player_spawn" in getroottable()))
+    {
+        getroottable().OnGameEvent_player_spawn <- OnGameEvent_player_spawn
+        Msg("Survival Horror: OnGameEvent_player_spawn registered\n")
+    }
+    
     if (!("OnGameEvent_ammo_pickup" in getroottable()))
     {
         getroottable().OnGameEvent_ammo_pickup <- OnGameEvent_ammo_pickup
@@ -125,6 +137,24 @@ function RegisterCallbacks()
     {
         getroottable().OnGameEvent_infected_spawn <- OnGameEvent_infected_spawn
         Msg("Survival Horror: OnGameEvent_infected_spawn registered\n")
+    }
+    
+    if (!("OnGameEvent_player_incapacitated" in getroottable()))
+    {
+        getroottable().OnGameEvent_player_incapacitated <- OnGameEvent_player_incapacitated
+        Msg("Survival Horror: OnGameEvent_player_incapacitated registered\n")
+    }
+    
+    if (!("OnGameEvent_round_start_post_nav" in getroottable()))
+    {
+        getroottable().OnGameEvent_round_start_post_nav <- OnGameEvent_round_start_post_nav
+        Msg("Survival Horror: OnGameEvent_round_start_post_nav registered\n")
+    }
+    
+    if (!("OnGameEvent_player_first_spawn" in getroottable()))
+    {
+        getroottable().OnGameEvent_player_first_spawn <- OnGameEvent_player_first_spawn
+        Msg("Survival Horror: OnGameEvent_player_first_spawn registered\n")
     }
 }
 
@@ -421,12 +451,25 @@ function FinalizePlayerAmmo(player)
     if (!player.IsValid()) return
     
     try {
-        local weapon = player.GetActiveWeapon()
-        if (weapon != null && weapon.GetClassname() == "weapon_hunting_rifle")
+        // Find hunting rifle by iterating weapon slots (more robust than GetActiveWeapon)
+        // This works even if player has switched to another weapon
+        local foundRifle = false
+        for (local i = 0; i < 6; i++)
         {
-            // Set clip to 20 rounds
-            weapon.SetClip1(HUNTING_RIFLE_CLIP)
-            Msg("Survival Horror: Set clip to " + HUNTING_RIFLE_CLIP + " rounds\n")
+            local weapon = NetProps.GetPropEntityArray(player, "m_hMyWeapons", i)
+            if (weapon != null && weapon.IsValid() && weapon.GetClassname() == "weapon_hunting_rifle")
+            {
+                // Set clip to 20 rounds
+                weapon.SetClip1(HUNTING_RIFLE_CLIP)
+                Msg("Survival Horror: Set clip to " + HUNTING_RIFLE_CLIP + " rounds (slot " + i + ")\n")
+                foundRifle = true
+                break
+            }
+        }
+        
+        if (!foundRifle)
+        {
+            Msg("Survival Horror: Warning - hunting rifle not found in inventory\n")
         }
         
         // Set ALL reserve ammo types to 0 to be thorough
@@ -457,11 +500,11 @@ function KickAllSurvivorBots()
             try {
                 if (IsPlayerABot(ent))
                 {
-                    // Kick the bot
+                    // Kick the bot using userid (more reliable than player name)
                     local userid = ent.GetPlayerUserId()
-                    SendToServerConsole("kick " + ent.GetPlayerName())
+                    SendToServerConsole("kickid " + userid)
                     kickedCount++
-                    Msg("Survival Horror: Kicked bot survivor\n")
+                    Msg("Survival Horror: Kicked bot survivor (userid " + userid + ")\n")
                 }
             }
             catch (e) {}
@@ -572,11 +615,12 @@ function CullZombiesToTarget(targetCount)
 //------------------------------------------------------------------------------
 // GetDefaultItem - Starting loadout
 // Players start with only a Hunting Rifle (20 rounds total)
+// Return "" to explicitly block a slot, not 0 (which may be converted to string "0")
 //------------------------------------------------------------------------------
 function GetDefaultItem(index)
 {
     if (index == 0) return "hunting_rifle"
-    return 0
+    return ""  // Block all other slots (pistol, etc.)
 }
 
 //------------------------------------------------------------------------------
@@ -928,6 +972,11 @@ if (!("MutationOptions" in getroottable()))
     getroottable().MutationOptions <- MutationOptions
     Msg("Survival Horror: MutationOptions registered\n")
 }
+
+// CRITICAL: Collect game event callbacks so the engine knows about OnGameEvent_* functions
+// Without this call, event handlers will NOT fire!
+__CollectEventCallbacks(this, "OnGameEvent_", "GameEventCallbacks", RegisterScriptGameEventListener)
+Msg("Survival Horror: Game event callbacks collected\n")
 
 // Apply convars again to make sure they stick
 ApplyConvarSettings()
