@@ -1,0 +1,97 @@
+// Survival Horror - Magnum with LIMITED AMMO
+// Changes ammo type from infinite AMMO_TYPE_PISTOL_MAGNUM to finite AMMO_TYPE_HUNTINGRIFLE
+// Reserve ammo controlled by ammo_huntingrifle_max convar (set to 6 in your VScript)
+//
+// WARNING: Using AMMO_TYPE_HUNTINGRIFLE preserves headshot mechanics on Special Infected
+// but means this weapon shares ammo pool with any hunting rifles!
+//
+WeaponData
+{
+	// Terror-specific Data --------------------
+	"VerticalPunch"			"4"
+	"SpreadPerShot"			"1.5"
+	"MaxSpread"				"15"
+	"SpreadDecay"			"4.5"
+	"MinDuckingSpread"		"0.0"
+	"MinStandingSpread"		"0.5"
+	"MinInAirSpread"		"1.5"
+	"MaxMovementSpread"		"3"
+	"AddonAttachment"		"pistol"
+	"Team"					"Survivor"
+	"Tier"					"0"
+	"ResponseRulesName"		"Magnum"
+	"WeaponAutoAimScale"	"1.0"
+	// End Terror-specific Data ----------------
+
+	"Rumble"			"4"
+
+	"MaxPlayerSpeed" 		"250"
+	"WeaponType" 			"pistol"
+	"WeaponPrice" 			"800"
+	"WeaponArmorRatio" 		"1.9"
+	"CrosshairMinDistance" 		"8"
+	"CrosshairDeltaDistance" 	"3"
+	"BuiltRightHanded" 		"0"
+	"PlayerAnimationExtension" 	"pistol"
+	"CanEquipWithShield"		"0"
+	
+	// Characteristics - keeping original magnum damage
+	"PenetrationNumLayers"		"2"
+	"PenetrationPower"			"30"
+	"PenetrationMaxDistance"	"500"
+	"Damage"					"80"		// Original magnum damage
+	"Range"						"2500"
+	"RangeModifier"				"0.95"
+	"GainRange"					"500"
+	"Bullets"					"1"
+	"CycleTime"					"0.3"
+	"TimeToIdle"				"2"
+	"IdleInterval"				"20"
+	
+	//==========================================================================
+	// KEY CHANGE: Use AMMO_TYPE_HUNTINGRIFLE instead of AMMO_TYPE_PISTOL_MAGNUM
+	// This gives FINITE ammo instead of infinite!
+	// Reserve ammo is controlled by: ammo_huntingrifle_max (default 150)
+	// Set this to 6 in your VScript for "6-shooter with 6 extra bullets"
+	//==========================================================================
+	"clip_size"					"6"			// 6-round cylinder
+	"primary_ammo"				"AMMO_TYPE_HUNTINGRIFLE"	// FINITE AMMO!
+
+	"printname"					"#L4D_Weapon_MagnumPistol"
+	"playermodel"				"models/w_models/Weapons/w_desert_eagle.mdl" 
+	"viewmodel"					"models/v_models/v_desert_eagle.mdl" 
+	"anim_prefix"				"anim"
+	"bucket"					"1"
+	"bucket_position"			"0"
+	
+	"secondary_ammo"			"None"
+	
+	"weight"					"2"
+	"item_flags"				"0"
+
+	// Sounds
+	"SoundData"
+	{
+		"single_shot"		"Magnum.Fire"
+	}
+
+	// Weapon Sprite data is loaded by the Client DLL.
+	"TextureData"
+	{
+		"weapon"
+		{
+				"font"		"WeaponIconsL4D"
+				"character"	"N"
+		}
+		"weapon_s"
+		{	
+				"font"		"WeaponIconsL4D"
+				"character"	"N"
+		}
+		"ammo"
+		{
+				"font"		"WeaponIconsL4D"
+				"character"	"$"
+		}
+	}
+}

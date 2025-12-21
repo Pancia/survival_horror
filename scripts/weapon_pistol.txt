@@ -1,0 +1,89 @@
+// Survival Horror - Standard Pistol disabled (0 damage)
+// Only the Magnum should be used, and it has limited ammo
+WeaponData
+{
+	// Terror-specific Data --------------------
+	"VerticalPunch"			"1.5"
+	"SpreadPerShot"			"0.5"
+	"MaxSpread"				"15"
+	"SpreadDecay"			"5"
+	"MinDuckingSpread"		"0.4"
+	"MinStandingSpread"		"0.6"
+	"MinInAirSpread"		"1.5"
+	"MaxMovementSpread"		"2"
+	"AddonAttachment"		"pistol"
+	"Team"					"Survivor"
+	"Tier"					"0"
+	"ResponseRulesName"		"Pistol"
+	"WeaponAutoAimScale"	"1.0"
+	// End Terror-specific Data ----------------
+
+	"Rumble"			"2"
+
+	"MaxPlayerSpeed" 		"250"
+	"WeaponType" 			"pistol"
+	"WeaponPrice" 			"200"
+	"WeaponArmorRatio" 		"1.0"
+	"CrosshairMinDistance" 		"8"
+	"CrosshairDeltaDistance" 	"3"
+	"BuiltRightHanded" 		"1"
+	"PlayerAnimationExtension" 	"pistol"
+	"CanEquipWithShield"		"1"
+	
+	// Characteristics
+	"PenetrationNumLayers"		"2"
+	"PenetrationPower"			"10"
+	"PenetrationMaxDistance"	"0"
+	"Damage"					"0"		// SURVIVAL HORROR: Zero damage - use the Magnum!
+	"Range"						"2000"
+	"RangeModifier"				"0.75"
+	"Bullets"					"1"
+	"CycleTime"					"0.175"
+	"TimeToIdle"				"2"
+	"IdleInterval"				"20"
+	
+	"clip_size"					"15"
+	"primary_ammo"				"AMMO_TYPE_PISTOL"
+
+	"printname"					"#L4D_Weapon_Pistol"
+	"playermodel"				"models/w_models/Weapons/w_pistol_A.mdl" 
+	"viewmodel"					"models/v_models/v_pistol_a.mdl" 
+	"anim_prefix"				"anim"
+	"bucket"					"1"
+	"bucket_position"			"0"
+
+	"clip_size"					"15"
+	"DualClipSizeMultiplier"	"2.0"
+	
+	"primary_ammo"				"AMMO_TYPE_PISTOL"
+	"secondary_ammo"			"None"
+	
+	"weight"					"0"
+	"item_flags"				"0"
+
+	// Sounds
+	"SoundData"
+	{
+		"single_shot"		"Pistol.Fire"
+	}
+
+	// Weapon Sprite data is loaded by the Client DLL.
+	"TextureData"
+	{
+		"weapon"
+		{
+				"font"		"WeaponIconsL4D"
+				"character"	"<"
+		}
+		"weapon_s"
+		{	
+				"font"		"WeaponIconsL4D"
+				"character"	"<"
+		}
+		"ammo"
+		{
+				"font"		"WeaponIconsL4D"
+				"character"	"$"
+		}
+	}
+}
